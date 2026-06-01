@@ -221,15 +221,15 @@ const GS = { MENU:0, PLAY:1, LEVELUP:2, OVER:3, STAGECLEAR:4, WIN:5 };
 let state = GS.MENU;
 
 /* ---------- 스테이지 설정 ---------- */
-const STAGE_LEN = 540;   // 스테이지당 9분(초)
+const STAGE_LEN = 360;   // 스테이지당 6분(초)
 const STAGE_MAX = 15;    // 최대 스테이지
 const SPAWN_MULT = 1.0;  // 몬스터 스폰 1배(원래대로)
 const XP_MULT = 2.0;     // 경험치 2배
 let stage = 1, stageTime = 0;
 let maxStageUnlocked = 1;  // 클리어로 해금된 최고 스테이지(사망해도 유지)
-let midBossCount = 0;     // 현 스테이지 중간보스 수(3·6분)
+let midBossCount = 0;     // 현 스테이지 중간보스 수(2·4분)
 let finalBossSpawned = false;
-const MIDBOSS_TIMES = [180, 360]; // 중간보스 2마리(3·6분), 스테이지 보스는 9분
+const MIDBOSS_TIMES = [120, 240]; // 중간보스 2마리(2·4분), 스테이지 보스는 6분
 function stageDiff(){ return 1 + (stage-1)*0.22; }  // 스테이지별 난이도 배수
 
 const player = {
@@ -242,6 +242,8 @@ const player = {
   fireRate:0.50,       // 발사 간격(초) — 기동력 상향
   damage:28,           // 기본 공격력(초반 밸런스 강화)
   projSpeed:430,
+  projLife:1.3,        // 투사체 사거리(수명)
+  bulletR:6,           // 투사체 크기(타격 범위)
   // 추가 무기
   orbs:0,              // 회전 오브 개수
   orbDmg:18,
@@ -260,7 +262,7 @@ let fieldTimer=0, chestTimer=0;     // 장애물/상자 필드 생성 타이머
 const IFRAME = 1.5;                 // 피격 후 무적 시간(초)
 const ENEMY_CAP_BASE = 70;          // 화면 내 최대 적 수(스테이지마다 +)
 
-const SKILL_MAX = 10;          // 스킬당 최대 레벨
+const SKILL_MAX = 5;           // 스킬당 최대 레벨
 let skillLevels = {};          // {스킬id: 현재레벨}
 let unlockedHidden = new Set(); // 해금된 히든 스킬 id
 
@@ -291,40 +293,43 @@ function inputVector(){
 // pool에서 매 레벨업마다 3개를 뽑아 제시
 const SKILLS = [
   {id:'proj',  ico:'🔱', nm:'추가 투사체', ds:'자동 공격 투사체 +1', tag:'up', apply:()=>player.projCount++},
-  {id:'rate',  ico:'⚡', nm:'공격 속도', ds:'발사 간격 18% 감소', tag:'up', apply:()=>player.fireRate*=0.82},
-  {id:'dmg',   ico:'🗡️', nm:'공격력', ds:'투사체 피해 +8', tag:'up', apply:()=>player.damage+=8},
-  {id:'spd',   ico:'👟', nm:'이동 속도', ds:'이동 속도 +14%', tag:'up', apply:()=>player.speed*=1.14},
-  {id:'hp',    ico:'❤️', nm:'최대 체력', ds:'최대 HP +25, 즉시 회복', tag:'up', apply:()=>{player.maxhp+=25;player.hp=Math.min(player.maxhp,player.hp+25);}},
-  {id:'regen', ico:'✚',  nm:'체력 재생', ds:'초당 HP +1.2 회복', tag:'up', apply:()=>player.regen+=1.2},
-  {id:'magnet',ico:'🧲', nm:'자석 범위', ds:'경험치 흡수 범위 +45', tag:'up', apply:()=>player.pickup+=45},
+  {id:'rate',  ico:'⚡', nm:'공격 속도', ds:'발사 간격 15% 감소', tag:'up', apply:()=>player.fireRate*=0.85},
+  {id:'dmg',   ico:'🗡️', nm:'공격력', ds:'투사체 피해 +10', tag:'up', apply:()=>player.damage+=10},
+  {id:'spd',   ico:'👟', nm:'이동 속도', ds:'이동 속도 +10%', tag:'up', apply:()=>player.speed*=1.10},
+  {id:'hp',    ico:'❤️', nm:'최대 체력', ds:'최대 HP +30, 즉시 회복', tag:'up', apply:()=>{player.maxhp+=30;player.hp=Math.min(player.maxhp,player.hp+30);}},
+  {id:'regen', ico:'✚',  nm:'체력 재생', ds:'초당 HP +1.5 회복', tag:'up', apply:()=>player.regen+=1.5},
+  {id:'magnet',ico:'🧲', nm:'자석 범위', ds:'경험치 흡수 범위 +50', tag:'up', apply:()=>player.pickup+=50},
+  {id:'range', ico:'🎯', nm:'공격 범위', ds:'투사체 사거리·크기 증가', tag:'new', apply:()=>{player.projLife+=0.3; player.bulletR+=1.2;}},
   {id:'orb',   ico:'🔵', nm:'회전 오브', ds:'주위를 도는 방어 오브 +1', tag:'new', apply:()=>{player.orbs++; rebuildOrbs();}},
-  {id:'nova',  ico:'💥', nm:'충격파', ds:'주기적으로 광역 폭발 발생', tag:'new', apply:()=>player.novaLv++},
+  {id:'nova',  ico:'💥', nm:'충격파', ds:'주기적 광역 폭발(범위·피해 증가)', tag:'new', apply:()=>player.novaLv++},
   {id:'field', ico:'🌀', nm:'장판', ds:'주변 적에게 지속 피해(범위·피해 증가)', tag:'new', apply:()=>player.fieldLv++},
-  {id:'vamp',  ico:'🩸', nm:'흡혈', ds:'적 처치 시 HP 회복 +0.8', tag:'new', apply:()=>player.lifesteal+=0.8},
+  {id:'vamp',  ico:'🩸', nm:'흡혈', ds:'적 처치 시 HP 회복 +1.0', tag:'new', apply:()=>player.lifesteal+=1.0},
   {id:'scatter',ico:'🎆', nm:'확산탄', tag:'new', apply:()=>player.scatterLv++,
     dsFn:(lv)=>`발동 시 전방위 탄막 · 발동 확률 ${Math.round(scatterChance(lv)*100)}% → ${Math.round(scatterChance(lv+1)*100)}%`},
   {id:'execute',ico:'💀', nm:'심판', tag:'new', apply:()=>player.executeLv++,
     dsFn:(lv)=>`발동 시 화면 내 일반 몬스터 즉사(경험치 X) · 발동 확률 ${(executeChance(lv)*100).toFixed(1)}% → ${(executeChance(lv+1)*100).toFixed(1)}%`},
 ];
-// 확산탄 / 심판 발동 확률(레벨 함수)
-function scatterChance(lv){ return Math.min(0.6, lv*0.08); }
-function executeChance(lv){ return Math.min(0.06, lv*0.012); }
+// 확산탄 / 심판 발동 확률(레벨 함수, 최대 레벨 5 기준)
+function scatterChance(lv){ return Math.min(0.6, lv*0.10); }
+function executeChance(lv){ return Math.min(0.05, lv*0.01); }
 
 /* ---------- 히든 스킬 ---------- */
 // req의 두 스킬이 모두 만렙(10)이 되면 해금되어 레벨업 선택지에 등장
 const HIDDEN = [
-  {id:'h_storm',  ico:'🌪️', nm:'폭풍 난사', ds:'투사체 +2, 발사 간격 30%↓', req:['proj','rate'], max:5,
-    apply:()=>{player.projCount+=2; player.fireRate*=0.7;}},
-  {id:'h_ruin',   ico:'💠', nm:'파멸의 오브', ds:'오브 +1, 오브 피해 +35', req:['dmg','orb'], max:5,
-    apply:()=>{player.orbs++; player.orbDmg+=35; rebuildOrbs();}},
-  {id:'h_void',   ico:'🕳️', nm:'특이점', ds:'충격파 레벨 +2, 흡수범위 +120', req:['nova','magnet'], max:5,
-    apply:()=>{player.novaLv+=2; player.pickup+=120;}},
-  {id:'h_immortal',ico:'🛡️', nm:'불멸', ds:'최대 HP +80, 재생 +3', req:['hp','regen'], max:5,
-    apply:()=>{player.maxhp+=80; player.hp+=80; player.regen+=3;}},
-  {id:'h_inferno', ico:'🔥', nm:'초토화 장판', ds:'장판 레벨 +2, 충격파 +1', req:['field','nova'], max:5,
-    apply:()=>{player.fieldLv+=2; player.novaLv++;}},
-  {id:'h_bloodlust',ico:'🧛', nm:'피의 갈증', ds:'흡혈 +1.5, 공격력 +12', req:['vamp','dmg'], max:5,
-    apply:()=>{player.lifesteal+=1.5; player.damage+=12;}},
+  {id:'h_storm',  ico:'🌪️', nm:'폭풍 난사', ds:'투사체 +1, 발사 간격 18%↓', req:['proj','rate'], max:5,
+    apply:()=>{player.projCount+=1; player.fireRate*=0.82;}},
+  {id:'h_ruin',   ico:'💠', nm:'파멸의 오브', ds:'오브 +1, 오브 피해 +25', req:['dmg','orb'], max:5,
+    apply:()=>{player.orbs++; player.orbDmg+=25; rebuildOrbs();}},
+  {id:'h_void',   ico:'🕳️', nm:'특이점', ds:'충격파 +1, 흡수범위 +80', req:['nova','magnet'], max:5,
+    apply:()=>{player.novaLv+=1; player.pickup+=80;}},
+  {id:'h_immortal',ico:'🛡️', nm:'불멸', ds:'최대 HP +50, 재생 +2', req:['hp','regen'], max:5,
+    apply:()=>{player.maxhp+=50; player.hp+=50; player.regen+=2;}},
+  {id:'h_inferno', ico:'🔥', nm:'초토화 장판', ds:'장판 +1, 충격파 +1', req:['field','nova'], max:5,
+    apply:()=>{player.fieldLv+=1; player.novaLv++;}},
+  {id:'h_bloodlust',ico:'🧛', nm:'피의 갈증', ds:'흡혈 +1.0, 공격력 +10', req:['vamp','dmg'], max:5,
+    apply:()=>{player.lifesteal+=1.0; player.damage+=10;}},
+  {id:'h_barrage', ico:'☄️', nm:'융단 폭격', ds:'투사체 +1, 사거리·크기 대폭 증가', req:['range','proj'], max:5,
+    apply:()=>{player.projCount+=1; player.projLife+=0.5; player.bulletR+=2.5;}},
 ];
 const SKILL_BY_ID = {}; [...SKILLS,...HIDDEN].forEach(s=>SKILL_BY_ID[s.id]=s);
 const maxOf = s => s.max || SKILL_MAX;
@@ -395,17 +400,17 @@ function spawnEnemy(){
   const y = player.y + Math.sin(ang)*radius;
   const t = stageTime;
   const d = stageDiff();           // 스테이지 난이도 배수
-  // 특수 몬스터: 스테이지가 오를수록 조금씩만 늘어남(상한 낮게 유지)
-  const bomberChance = stage>=2 ? Math.min(0.09, 0.02 + stage*0.006) : 0;
-  const rangedChance = stage>=3 ? Math.min(0.08, 0.015 + stage*0.005) : 0;
+  // 특수 몬스터: 등장 확률 상향(초반부터 더 자주)
+  const bomberChance = Math.min(0.16, 0.06 + stage*0.012);            // 1스테이지부터
+  const rangedChance = stage>=2 ? Math.min(0.15, 0.05 + stage*0.011) : 0.03;
   const roll = Math.random();
   let e;
   if(roll < bomberChance){ // 자폭 — 접근 후 폭발(육각형, 붉은빛)
     e={x,y,r:16,speed:rand(95,120),hp:(22+t*0.8)*d,maxhp:(22+t*0.8)*d,dmg:0,color:'#ff3d3d',xp:3,shape:'hexagon',
-       kind:'bomber', explode:true, boomDmg:Math.round(24*d), boomR:90};
+       kind:'bomber', explode:true, boomDmg:Math.round(20*d), boomR:55};
   }else if(roll < bomberChance+rangedChance){ // 원거리 — 거리 두고 사격(오각형, 청록)
     e={x,y,r:13,speed:rand(60,78),hp:(16+t*0.7)*d,maxhp:(16+t*0.7)*d,dmg:6*d,color:'#5ad1ff',xp:3,shape:'pentagon',
-       kind:'ranged', fireCd:rand(0.6,1.6), shotDmg:Math.round(9*d), keepDist:300};
+       kind:'ranged', fireCd:rand(0.6,1.6), shotDmg:Math.round(9*d), keepDist:300, shotColor:'#ff8a3d'};
   }else{
     const tier = Math.random();
     if(tier>0.92 && t>30){ // 탱커 — 마름모
@@ -419,28 +424,37 @@ function spawnEnemy(){
   enemies.push(e);
 }
 
-/* ---------- 중간보스 (3·6·9·12분) — 처치 시 즉시 레벨업 아이템 드랍 ---------- */
+/* ---------- 중간보스 (3·6분) — 처치 시 즉시 레벨업 아이템 드랍 ---------- */
 function spawnMidBoss(){
   const d = stageDiff();
-  const hp = (900 + midBossCount*700)*d;
+  const hp = (700 + midBossCount*500)*d;
+  // 보스 스킬: 첫 중간보스=원거리 탄막, 둘째=충격파
+  const skills = midBossCount===1 ? ['volley'] : ['nova'];
   // 일반 몬스터(반경 14)의 3배 크기 = 42
-  spawnBossEntity({ r:42, hp, dmg:26*d, color:'#c23bff', xp:30, levelupDrop:true, label:'BOSS', shape:'hexagon' });
+  spawnBossEntity({ r:42, hp, dmg:26*d, color:'#c23bff', xp:30, levelupDrop:true, label:'BOSS', shape:'hexagon', skills });
 }
-/* ---------- 스테이지 보스 (15분) — 처치 시 스테이지 클리어 ---------- */
+/* ---------- 스테이지 보스 (9분) — 처치 시 스테이지 클리어 ---------- */
 function spawnFinalBoss(){
   finalBossSpawned = true;
   const d = stageDiff();
-  const hp = (3000 + stage*1500)*d;
+  const hp = (2200 + stage*1200)*d;
+  // 스테이지 보스: 스킬 2개(탄막+충격파), 5스테이지부터 소환 추가
+  const skills = stage>=5 ? ['volley','nova','summon'] : ['volley','nova'];
   // 스테이지 보스는 더 거대하게(반경 56)
-  spawnBossEntity({ r:56, hp, dmg:34*d, color:'#ff2d6f', xp:80, stageBoss:true, label:'STAGE BOSS', shape:'hexagon' });
+  spawnBossEntity({ r:56, hp, dmg:34*d, color:'#ff2d6f', xp:80, stageBoss:true, label:'STAGE BOSS', shape:'hexagon', skills });
 }
 function spawnBossEntity(o){
   const ang = Math.random()*Math.PI*2;
   const radius = Math.max(W,H)*0.6 + 90;
   const bx = player.x+Math.cos(ang)*radius, by = player.y+Math.sin(ang)*radius;
-  enemies.push(Object.assign({
+  const boss = Object.assign({
     x:bx, y:by, speed: rand(46,56), maxhp:o.hp, boss:true
-  }, o));
+  }, o);
+  // 스킬 쿨다운 초기화(등장 직후 바로 쓰지 않도록 약간의 지연)
+  boss.skills = o.skills || [];
+  boss.sk = {};
+  for(const s of boss.skills) boss.sk[s] = SKILL_CD[s]*0.6 + rand(0,0.8);
+  enemies.push(boss);
   // ---- 보스 등장 연출 ----
   // 1) 등장 위치 충격파 링 + 파티클
   particles.push({ring:true, x:bx, y:by, life:0.9, max:0.9, color:o.color, r:o.r});
@@ -454,6 +468,50 @@ function spawnBossEntity(o){
   const f=document.getElementById('bossFlash');
   f.classList.remove('show'); void f.offsetWidth; f.classList.add('show');
   clearTimeout(f._t); f._t=setTimeout(()=>f.classList.remove('show'), 1150);
+}
+
+/* ---------- 보스 스킬 ---------- */
+const SKILL_CD = { volley:2.4, nova:3.6, summon:5.5 };  // 기본 쿨다운(초)
+function updateBossSkills(e, dt){
+  if(!e.skills) return;
+  const cdScale = Math.max(0.6, 1 - (stage-1)*0.03); // 스테이지 오를수록 약간 빨라짐
+  for(const s of e.skills){
+    e.sk[s]-=dt;
+    if(e.sk[s]<=0){
+      if(s==='volley') bossVolley(e);
+      else if(s==='nova') bossNova(e);
+      else if(s==='summon') bossSummon(e);
+      e.sk[s] = SKILL_CD[s]*cdScale;
+    }
+  }
+}
+function bossVolley(e){
+  const d=stageDiff();
+  const base=Math.atan2(player.y-e.y, player.x-e.x);
+  const n=5, spread=0.6, sp=300, dmg=Math.round(10*d);
+  for(let i=0;i<n;i++){
+    const a=base+(i-(n-1)/2)*(spread/(n-1));
+    enemyBullets.push({x:e.x,y:e.y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,r:8,dmg,life:3.2,color:e.color});
+  }
+}
+function bossNova(e){
+  const d=stageDiff();
+  const R=150, dmg=Math.round(14*d);
+  particles.push({ring:true,x:e.x,y:e.y,life:0.6,max:0.6,color:e.color,r:e.r});
+  burst(e.x,e.y,e.color,18);
+  if(player.invuln<=0 && dist(e.x,e.y,player.x,player.y) < R+player.r){
+    player.hp-=dmg; player.invuln=IFRAME;
+    damageTexts.push({x:player.x,y:player.y-player.r-6,val:'-'+dmg,life:0.7,vy:-34,color:e.color});
+    if(player.hp<=0) gameOver();
+  }
+}
+function bossSummon(e){
+  const d=stageDiff(), t=stageTime;
+  for(let i=0;i<3;i++){
+    const a=rand(0,Math.PI*2);
+    enemies.push({x:e.x+Math.cos(a)*60, y:e.y+Math.sin(a)*60, r:14, speed:rand(80,100),
+      hp:(18+t*0.9)*d, maxhp:(18+t*0.9)*d, dmg:10*d, color:'#ff5e6c', xp:1, shape:'square', kind:'normal'});
+  }
 }
 
 /* ---------- 장애물 / 보물상자 (전 필드 분산) ---------- */
@@ -554,13 +612,13 @@ function fire(){
   for(let i=0;i<n;i++){
     const off = (i-(n-1)/2)*spread;
     const a = baseAng+off;
-    bullets.push({x:player.x,y:player.y,vx:Math.cos(a)*player.projSpeed,vy:Math.sin(a)*player.projSpeed,r:6,dmg:player.damage,life:1.3});
+    bullets.push({x:player.x,y:player.y,vx:Math.cos(a)*player.projSpeed,vy:Math.sin(a)*player.projSpeed,r:player.bulletR,dmg:player.damage,life:player.projLife});
   }
   // 확산탄: 확률 발동 시 전방위 탄막
   if(player.scatterLv>0 && Math.random()<scatterChance(player.scatterLv)){
     const m=12;
     for(let i=0;i<m;i++){ const a=Math.PI*2/m*i;
-      bullets.push({x:player.x,y:player.y,vx:Math.cos(a)*player.projSpeed,vy:Math.sin(a)*player.projSpeed,r:6,dmg:player.damage,life:1.1}); }
+      bullets.push({x:player.x,y:player.y,vx:Math.cos(a)*player.projSpeed,vy:Math.sin(a)*player.projSpeed,r:player.bulletR,dmg:player.damage,life:player.projLife*0.85}); }
     particles.push({ring:true,x:player.x,y:player.y,life:0.4,max:0.4,color:getCSS('--accent2'),r:10});
   }
   // 심판: 확률 발동 시 화면 내 일반 몬스터 즉사
@@ -713,8 +771,8 @@ function update(dt){
   if(player.fieldLv>0){
     player.fieldTick-=dt;
     if(player.fieldTick<=0){
-      const fR = 70 + player.fieldLv*18;
-      const fDmg = 6 + player.fieldLv*4;
+      const fR = 70 + player.fieldLv*16;
+      const fDmg = 5 + player.fieldLv*3;
       for(const e of enemies){ if(!e.dead && dist(player.x,player.y,e.x,e.y)<fR+e.r) hurtEnemy(e,fDmg); }
       for(const o of obstacles){ if(o.breakable && dist(player.x,player.y,o.x,o.y)<fR+o.w/2) damageObstacle(o); }
       for(const c of chests){ if(dist(player.x,player.y,c.x,c.y)<fR+c.w/2) damageChest(c); }
@@ -779,12 +837,13 @@ function update(dt){
       else { e.x+=Math.cos(a+Math.PI/2)*e.speed*0.5*dt; e.y+=Math.sin(a+Math.PI/2)*e.speed*0.5*dt; } // 옆걸음
       e.fireCd-=dt;
       if(e.fireCd<=0 && dToP<640){
-        const sp=260; enemyBullets.push({x:e.x,y:e.y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,r:6,dmg:e.shotDmg,life:3});
+        const sp=260; enemyBullets.push({x:e.x,y:e.y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,r:6,dmg:e.shotDmg,life:3,color:e.shotColor||'#ff8a3d'});
         e.fireCd=rand(1.4,2.2);
       }
     }else{
       e.x+=Math.cos(a)*e.speed*dt; e.y+=Math.sin(a)*e.speed*dt;
     }
+    if(e.boss) updateBossSkills(e, dt);   // 보스 스킬 사용
     // 접촉 처리
     if(dToP < e.r+player.r){
       if(e.kind==='bomber'){ detonate(e); e.dead=true; }   // 자폭: 접촉 시 폭발
@@ -948,11 +1007,12 @@ function render(){
     ctx.fillStyle=getCSS('--accent2'); ctx.beginPath(); ctx.arc(sx,sy,b.r,0,Math.PI*2); ctx.fill(); ctx.restore();
   }
 
-  // 적 투사체(원거리)
+  // 적 투사체(원거리·보스)
   for(const b of enemyBullets){ const [sx,sy]=worldToScreen(b.x,b.y);
-    ctx.save(); ctx.shadowBlur=10; ctx.shadowColor='#5ad1ff';
-    ctx.fillStyle='#bfeaff'; ctx.beginPath(); ctx.arc(sx,sy,b.r,0,Math.PI*2); ctx.fill();
-    ctx.strokeStyle='#5ad1ff'; ctx.lineWidth=2; ctx.stroke(); ctx.restore();
+    const col=b.color||'#5ad1ff';
+    ctx.save(); ctx.shadowBlur=10; ctx.shadowColor=col;
+    ctx.fillStyle='#ffffff'; ctx.beginPath(); ctx.arc(sx,sy,b.r,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle=col; ctx.lineWidth=2; ctx.stroke(); ctx.restore();
   }
 
   // 회전 오브
@@ -964,7 +1024,7 @@ function render(){
   // 장판형 스킬 영역
   if(player.fieldLv>0){
     const [px0,py0]=worldToScreen(player.x,player.y);
-    const fR=70+player.fieldLv*18;
+    const fR=70+player.fieldLv*16;
     const pulse=0.12+0.04*Math.sin(gameTime*5);
     ctx.save();
     ctx.fillStyle=`rgba(120,90,255,${pulse})`;
@@ -1178,7 +1238,7 @@ function startGame(fromStage=1){
   Object.assign(player,{x:0,y:0,r:14,speed:195,
     maxhp:Math.round(100+(start-1)*15), hp:Math.round(100+(start-1)*15),
     regen:0,invuln:0,level:1,xp:0,xpNext:5,
-    pickup:90,projCount:1,fireRate:0.50,damage:Math.round(28*boost),projSpeed:430,orbs:0,orbDmg:18,novaLv:0,
+    pickup:90,projCount:1,fireRate:0.50,damage:Math.round(28*boost),projSpeed:430,projLife:1.3,bulletR:6,orbs:0,orbDmg:18,novaLv:0,
     fieldLv:0,fieldTick:0,lifesteal:0,scatterLv:0,executeLv:0});
   enemies=[];bullets=[];enemyBullets=[];gems=[];orbs=[];particles=[];damageTexts=[];obstacles=[];chests=[];
   gameTime=0;kills=0;fireTimer=0;spawnTimer=0;novaTimer=0;fieldTimer=0;chestTimer=0;
